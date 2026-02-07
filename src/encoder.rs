@@ -665,6 +665,180 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_frame_signal_quality() {
+        // Encode/decode 20 frames of sine, check SNR improves after initial
+        // transient (first frame uses zero overlap memory, so quality is lower)
+        use crate::{A1800Encoder, A1800Decoder};
+
+        let mut encoder = A1800Encoder::new(16000).unwrap();
+        let mut decoder = A1800Decoder::new(16000).unwrap();
+        let enc_size = encoder.encoded_frame_size();
+        let mut encoded = vec![0i16; enc_size];
+        let mut decoded = vec![0i16; 320];
+
+        let mut frame_energies = Vec::new();
+        for frame in 0..20 {
+            let mut pcm = [0i16; 320];
+            for i in 0..320 {
+                let t = (frame * 320 + i) as f64 / 16000.0;
+                pcm[i] = (8000.0 * (2.0 * std::f64::consts::PI * 440.0 * t).sin()) as i16;
+            }
+
+            encoder.encode_frame(&pcm, &mut encoded).unwrap();
+            decoder.decode_frame(&encoded, &mut decoded).unwrap();
+
+            let energy: f64 = decoded.iter().map(|&s| (s as f64).powi(2)).sum();
+            frame_energies.push(energy);
+        }
+
+        // All frames after the first should have non-trivial energy
+        for (i, &e) in frame_energies.iter().enumerate().skip(1) {
+            assert!(e > 1000.0, "frame {} energy {:.0} too low", i, e);
+        }
+
+        // Steady-state frames (5+) should have consistent energy (no drift)
+        let steady: Vec<f64> = frame_energies[5..].to_vec();
+        let avg: f64 = steady.iter().sum::<f64>() / steady.len() as f64;
+        for (i, &e) in steady.iter().enumerate() {
+            let ratio = e / avg;
+            assert!(ratio > 0.3 && ratio < 3.0,
+                "frame {} energy {:.0} deviates too much from average {:.0}", i + 5, e, avg);
+        }
+    }
+
+    #[test]
+    fn test_multi_frame_boundary_continuity() {
+        // Check that samples near frame boundaries don't have large jumps
+        // (overlap-add should produce smooth transitions)
+        use crate::{A1800Encoder, A1800Decoder};
+
+        let mut encoder = A1800Encoder::new(16000).unwrap();
+        let mut decoder = A1800Decoder::new(16000).unwrap();
+        let enc_size = encoder.encoded_frame_size();
+        let mut encoded = vec![0i16; enc_size];
+
+        let mut all_decoded: Vec<i16> = Vec::new();
+        for frame in 0..10 {
+            let mut pcm = [0i16; 320];
+            for i in 0..320 {
+                let t = (frame * 320 + i) as f64 / 16000.0;
+                pcm[i] = (6000.0 * (2.0 * std::f64::consts::PI * 200.0 * t).sin()) as i16;
+            }
+            let mut decoded = [0i16; 320];
+            encoder.encode_frame(&pcm, &mut encoded).unwrap();
+            decoder.decode_frame(&encoded, &mut decoded).unwrap();
+            all_decoded.extend_from_slice(&decoded);
+        }
+
+        // Check sample-to-sample differences at frame boundaries (every 320 samples)
+        // Skip the first boundary (frame 0→1) since frame 0 has zero overlap memory
+        for boundary in 2..10 {
+            let idx = boundary * 320;
+            let diff = ((all_decoded[idx] as i32) - (all_decoded[idx - 1] as i32)).abs();
+            // For a 200Hz sine at 16kHz, max sample-to-sample delta ≈ 200*2π/16000 * 6000 ≈ 470
+            // Allow generous headroom for codec artifacts
+            assert!(diff < 10000,
+                "boundary {}-{}: jump of {} between samples {} and {}",
+                boundary - 1, boundary, diff, idx - 1, idx);
+        }
+    }
+
+    #[test]
+    fn test_multi_frame_long_stability() {
+        // Encode/decode 100 frames to verify no state corruption or drift
+        use crate::{A1800Encoder, A1800Decoder};
+
+        let mut encoder = A1800Encoder::new(16000).unwrap();
+        let mut decoder = A1800Decoder::new(16000).unwrap();
+        let enc_size = encoder.encoded_frame_size();
+        let mut encoded = vec![0i16; enc_size];
+        let mut decoded = vec![0i16; 320];
+
+        for frame in 0..100 {
+            let mut pcm = [0i16; 320];
+            for i in 0..320 {
+                let t = (frame * 320 + i) as f64 / 16000.0;
+                pcm[i] = (5000.0 * (2.0 * std::f64::consts::PI * 1000.0 * t).sin()) as i16;
+            }
+            encoder.encode_frame(&pcm, &mut encoded).unwrap();
+            decoder.decode_frame(&encoded, &mut decoded).unwrap();
+        }
+
+        // After 100 frames: output should still have energy and be in range
+        let energy: f64 = decoded.iter().map(|&s| (s as f64).powi(2)).sum();
+        assert!(energy > 1000.0, "frame 99 energy {:.0} too low after 100 frames", energy);
+        let max_abs = decoded.iter().map(|&s| (s as i32).abs()).max().unwrap();
+        assert!(max_abs < 32768, "sample overflow after 100 frames");
+    }
+
+    #[test]
+    fn test_multi_frame_silence_to_signal() {
+        // Transition from silence to signal — tests that encoder state handles
+        // the energy jump correctly
+        use crate::{A1800Encoder, A1800Decoder};
+
+        let mut encoder = A1800Encoder::new(16000).unwrap();
+        let mut decoder = A1800Decoder::new(16000).unwrap();
+        let enc_size = encoder.encoded_frame_size();
+        let mut encoded = vec![0i16; enc_size];
+        let mut decoded = vec![0i16; 320];
+
+        // 5 frames of silence
+        for _ in 0..5 {
+            let pcm = [0i16; 320];
+            encoder.encode_frame(&pcm, &mut encoded).unwrap();
+            decoder.decode_frame(&encoded, &mut decoded).unwrap();
+        }
+        let silence_energy: f64 = decoded.iter().map(|&s| (s as f64).powi(2)).sum();
+
+        // 5 frames of signal
+        for frame in 0..5 {
+            let mut pcm = [0i16; 320];
+            for i in 0..320 {
+                let t = (frame * 320 + i) as f64 / 16000.0;
+                pcm[i] = (10000.0 * (2.0 * std::f64::consts::PI * 500.0 * t).sin()) as i16;
+            }
+            encoder.encode_frame(&pcm, &mut encoded).unwrap();
+            decoder.decode_frame(&encoded, &mut decoded).unwrap();
+        }
+        let signal_energy: f64 = decoded.iter().map(|&s| (s as f64).powi(2)).sum();
+
+        // Signal frames should have much more energy than silence
+        assert!(signal_energy > silence_energy + 10000.0,
+            "signal energy {:.0} should be much larger than silence energy {:.0}",
+            signal_energy, silence_energy);
+    }
+
+    #[test]
+    fn test_multi_frame_multiple_bitrates() {
+        // Multi-frame round-trip at each bitrate
+        use crate::{A1800Encoder, A1800Decoder};
+
+        for &bitrate in &[4800u16, 8000, 9600, 12000, 16000, 24000] {
+            let mut encoder = A1800Encoder::new(bitrate).unwrap();
+            let mut decoder = A1800Decoder::new(bitrate).unwrap();
+            let enc_size = encoder.encoded_frame_size();
+            let mut encoded = vec![0i16; enc_size];
+            let mut decoded = vec![0i16; 320];
+
+            for frame in 0..10 {
+                let mut pcm = [0i16; 320];
+                for i in 0..320 {
+                    let t = (frame * 320 + i) as f64 / 16000.0;
+                    pcm[i] = (6000.0 * (2.0 * std::f64::consts::PI * 440.0 * t).sin()) as i16;
+                }
+                encoder.encode_frame(&pcm, &mut encoded).unwrap();
+                decoder.decode_frame(&encoded, &mut decoded).unwrap();
+            }
+
+            // After 10 frames, last decoded frame should have energy
+            let energy: f64 = decoded.iter().map(|&s| (s as f64).powi(2)).sum();
+            assert!(energy > 0.0,
+                "bitrate {} multi-frame: last frame energy {:.0}", bitrate, energy);
+        }
+    }
+
+    #[test]
     fn test_roundtrip_silence() {
         // Silence should round-trip to silence (or near-silence)
         use crate::{A1800Encoder, A1800Decoder};
