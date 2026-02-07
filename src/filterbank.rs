@@ -1,7 +1,10 @@
-/// Inverse filterbank for the A1800 audio codec.
+/// Filterbank transforms for the A1800 audio codec.
 ///
-/// 5-stage butterfly decomposition → 10x10 cosine modulation → 5-stage reconstruction.
+/// Inverse: 5-stage butterfly decomposition → 10x10 cosine modulation → 5-stage reconstruction.
 /// Matches `inverse_filterbank` / `FUN_10002740` at address 0x10002740 in the DLL.
+///
+/// Forward: 5-stage reconstruction → 10x10 cosine modulation → 5-stage butterfly.
+/// Matches `forward_filterbank` / `FUN_10002280` at address 0x10002280 in the DLL.
 
 use crate::fixedpoint::*;
 use crate::tables::*;
@@ -73,6 +76,145 @@ pub fn inverse(input: &[i16], output: &mut [i16], frame_size: i16) {
     if frame_size == 320 {
         for i in 0..n {
             output[i] = shl(output[i], 1);
+        }
+    }
+}
+
+/// Perform forward filterbank transform on `frame_size` time-domain samples.
+///
+/// Converts time-domain input into frequency-domain subband output.
+/// Matches `forward_filterbank` / `FUN_10002280` at address 0x10002280 in the DLL.
+pub fn forward(input: &[i16], output: &mut [i16], frame_size: i16) {
+    let n = frame_size as usize;
+    let mut buf_a = [0i16; 320];
+    let mut buf_b = [0i16; 320];
+
+    // ── Phase 1: 5-stage reconstruction with forward filterbank coefficients ─
+    // Stages 0→4, each using its own forward coefficient table.
+    // Unlike inverse, forward does not apply extract_h(l_shl(..., 1)) — it uses extract_h(l_mac(...)) directly.
+    fwd_reconstruct(input, &mut buf_a, n, 0, &FWD_FILTERBANK_COEFF_4);
+    fwd_reconstruct(&buf_a, &mut buf_b, n, 1, &FWD_FILTERBANK_COEFF_3);
+    fwd_reconstruct(&buf_b, &mut buf_a, n, 2, &FWD_FILTERBANK_COEFF_2);
+    fwd_reconstruct(&buf_a, &mut buf_b, n, 3, &FWD_FILTERBANK_COEFF_1);
+    fwd_reconstruct(&buf_b, &mut buf_a, n, 4, &FWD_FILTERBANK_COEFF_0);
+
+    // ── Phase 2: Cosine modulation ───────────────────────────────────
+    // Same structure as inverse but uses FWD_COSINE_MOD_MATRIX and extract_h(acc) directly.
+    for g in 0..32usize {
+        for k in 0..10usize {
+            let mut acc: i32 = 0;
+            for j in 0..10usize {
+                acc = l_mac(acc, buf_a[g * 10 + j], FWD_COSINE_MOD_MATRIX[k + j * 10]);
+            }
+            buf_b[g * 10 + k] = extract_h(acc);
+        }
+    }
+
+    buf_a[..n].copy_from_slice(&buf_b[..n]);
+
+    // ── Phase 3: 5-stage butterfly ──────────────────────────────────
+    // Stage 0: 32-bit precision with pre-scaling (l_shr then l_add/l_sub)
+    {
+        let mut dst_pos = 0usize;
+        let mut front = 0usize;
+        let mut back = n;
+        while front < back {
+            back -= 1;
+            let a = buf_a[front] as i32;
+            let c = buf_a[back] as i32;
+            front += 1;
+
+            let a_shr = l_shr(a, 1);
+            let c_shr = l_shr(c, 1);
+
+            output[dst_pos] = extract_l(l_add(a_shr, c_shr));
+            output[dst_pos + 1] = extract_l(l_sub(a_shr, c_shr));
+            dst_pos += 2;
+        }
+    }
+
+    // Stages 1–4: 32-bit precision with pre-scaling
+    fwd_butterfly(&output[..n], &mut buf_a, n, 1);
+    fwd_butterfly(&buf_a, &mut buf_b, n, 2);
+    fwd_butterfly(&buf_b, &mut buf_a, n, 3);
+    fwd_butterfly(&buf_a, output, n, 4);
+}
+
+/// Forward butterfly for stages 1–4.
+///
+/// Each group of `group_size` elements: sums from front+back, differences from front-back.
+/// Uses 32-bit precision with pre-scaling (l_shr before l_add/l_sub).
+fn fwd_butterfly(src: &[i16], dst: &mut [i16], n: usize, stage: i16) {
+    let group_size = shr(n as i16, stage) as usize;
+    let num_groups = shl(1, stage) as usize;
+
+    let mut dst_pos = 0usize;
+    for g in 0..num_groups {
+        let base = g * group_size;
+        let mut front = base;
+        let mut back = base + group_size;
+        while front < back {
+            back -= 1;
+            let a = l_shr(src[front] as i32, 1);
+            let c = l_shr(src[back] as i32, 1);
+            front += 1;
+
+            dst[dst_pos] = extract_l(l_add(a, c));
+            dst[dst_pos + 1] = extract_l(l_sub(a, c));
+            dst_pos += 2;
+        }
+    }
+}
+
+/// Forward reconstruction butterfly using forward filterbank coefficients.
+///
+/// Same structure as inverse reconstruct but uses extract_h(l_mac(...)) directly
+/// instead of extract_h(l_shl(l_mac(...), 1)).
+fn fwd_reconstruct(src: &[i16], dst: &mut [i16], n: usize, stage: i16, coeffs: &[i16]) {
+    let group_size = shr(n as i16, stage) as usize;
+    let num_groups = shl(1, stage) as usize;
+    let half = group_size / 2;
+
+    for g in 0..num_groups {
+        let src_base = g * group_size;
+        let dst_base = g * group_size;
+
+        let mut src_first = src_base;
+        let mut src_second = src_base + half;
+        let mut dst_front = dst_base;
+        let mut dst_back = dst_base + group_size;
+        let mut ci = 0usize;
+
+        while dst_front < dst_back {
+            let a = src[src_first];
+            let b = src[src_first + 1];
+            let c = src[src_second];
+            let d = src[src_second + 1];
+            src_first += 2;
+            src_second += 2;
+
+            let c0 = coeffs[ci];
+            let c1 = coeffs[ci + 1];
+            let c2 = coeffs[ci + 2];
+            let c3 = coeffs[ci + 3];
+            ci += 4;
+
+            // A = c0*a − c1*c
+            let val_a = extract_h(l_mac(l_mac(0, c0, a), negate(c1), c));
+            // B = c1*a + c0*c
+            let val_b = extract_h(l_mac(l_mac(0, c1, a), c0, c));
+            // C = c2*b + c3*d
+            let val_c = extract_h(l_mac(l_mac(0, c2, b), c3, d));
+            // D = c3*b − c2*d
+            let val_d = extract_h(l_mac(l_mac(0, c3, b), negate(c2), d));
+
+            dst[dst_front] = val_a;
+            dst[dst_front + 1] = val_c;
+            dst[dst_back - 1] = val_b;
+            dst[dst_back - 2] = val_d;
+
+            dst_front += 2;
+            dst_back -= 2;
         }
     }
 }
@@ -217,5 +359,16 @@ mod tests {
 
         assert_eq!(buf[0], expected_sum);
         assert_eq!(buf[319], expected_diff);
+    }
+
+    #[test]
+    fn test_forward_zeros() {
+        // All-zero input should produce all-zero output.
+        let input = [0i16; 320];
+        let mut output = [0i16; 320];
+        forward(&input, &mut output, 320);
+        for (i, &s) in output.iter().enumerate() {
+            assert_eq!(s, 0, "sample {} should be 0", i);
+        }
     }
 }

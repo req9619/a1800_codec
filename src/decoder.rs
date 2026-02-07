@@ -106,7 +106,7 @@ impl DecoderState {
         let mut alloc = [0i16; MAX_SUBBANDS];
         let mut scratch = [0i16; 32];
         let remaining = bs.total_bits_remaining;
-        Self::compute_bit_alloc_for_frame(
+        compute_bit_alloc_for_frame(
             remaining,
             self.num_subbands,
             &gains[..ns],
@@ -115,7 +115,7 @@ impl DecoderState {
         );
 
         // Apply frame parameter adjustments
-        Self::increment_allocation_bins(frame_param, &mut alloc, &scratch);
+        increment_allocation_bins(frame_param, &mut alloc, &scratch);
 
         // Decode subframe samples
         self.decode_subframes(bs, ns, &scale_factors, &mut alloc, output);
@@ -213,212 +213,6 @@ impl DecoderState {
             let idx = l_add(gains_out[i] as i32, offset as i32);
             let idx_i16 = extract_l(idx);
             scale_factors_out[i] = SCALE_FACTOR_BITS[idx_i16 as usize];
-        }
-    }
-
-    /// Compute bit allocation for frame.
-    /// Matches `compute_bit_alloc_for_frame` at 0x10001d30.
-    fn compute_bit_alloc_for_frame(
-        remaining_bits: i16,
-        num_subbands: i16,
-        gains: &[i16],
-        alloc: &mut [i16],
-        scratch: &mut [i16],
-    ) {
-        let budget = if sub(remaining_bits, 0x140) > 0 {
-            let excess = sub(remaining_bits, 0x140);
-            let scaled = l_mult0(excess, 5);
-            let reduced = shr(extract_l(scaled), 3);
-            add(reduced, 0x140)
-        } else {
-            remaining_bits
-        };
-
-        let threshold = Self::search_threshold(gains, num_subbands, budget);
-        Self::compute_allocation(alloc, gains, num_subbands, threshold);
-        Self::optimize_allocation(alloc, scratch, gains, budget, num_subbands, 16, threshold);
-    }
-
-    /// Binary search for bit allocation threshold.
-    /// Matches `search_bit_allocation_threshold` at 0x100020f0.
-    fn search_threshold(gains: &[i16], num_subbands: i16, budget: i16) -> i16 {
-        let ns = num_subbands as usize;
-        let mut thresh: i16 = -32;
-        let mut step: i16 = 32;
-
-        loop {
-            let candidate = add(thresh, step);
-            let mut local_alloc = [0i16; MAX_SUBBANDS];
-
-            for i in 0..ns {
-                let diff = sub(candidate, gains[i]);
-                let mut q = shr(diff, 1);
-                if q < 0 {
-                    q = 0;
-                }
-                if sub(q, 7) > 0 {
-                    q = sub(8, 1);
-                }
-                local_alloc[i] = q;
-            }
-
-            let mut cost: i16 = 0;
-            for i in 0..ns {
-                cost = add(cost, BIT_ALLOC_COST[local_alloc[i] as usize]);
-            }
-
-            let target = sub(budget, 0x20);
-            let slack = sub(cost, target);
-            if slack >= 0 {
-                thresh = candidate;
-            }
-
-            step = shr(step, 1);
-            if step <= 0 {
-                break;
-            }
-        }
-
-        thresh
-    }
-
-    /// Compute per-subband allocation from threshold and gains.
-    /// Matches `compute_bit_allocation` at 0x10002200.
-    fn compute_allocation(alloc: &mut [i16], gains: &[i16], num_subbands: i16, threshold: i16) {
-        for i in 0..(num_subbands as usize) {
-            let diff = sub(threshold, gains[i]);
-            let mut q = shr(diff, 1);
-            if q < 0 {
-                q = 0;
-            }
-            if sub(q, 7) > 0 {
-                q = sub(8, 1);
-            }
-            alloc[i] = q;
-        }
-    }
-
-    /// Greedy bit allocation optimization.
-    /// Matches `optimize_bit_allocation` at 0x10001dc0.
-    fn optimize_allocation(
-        alloc: &mut [i16],
-        scratch: &mut [i16],
-        gains: &[i16],
-        budget: i16,
-        num_subbands: i16,
-        num_iterations: i16,
-        threshold: i16,
-    ) {
-        let ns = num_subbands as usize;
-
-        // Compute initial cost
-        let mut inc_cost: i16 = 0;
-        for i in 0..ns {
-            inc_cost = add(inc_cost, BIT_ALLOC_COST[alloc[i] as usize]);
-        }
-
-        // Working copies
-        let mut dec_alloc = [0i16; MAX_SUBBANDS];
-        let mut inc_alloc = [0i16; MAX_SUBBANDS];
-        for i in 0..ns {
-            dec_alloc[i] = alloc[i];
-            inc_alloc[i] = alloc[i];
-        }
-
-        let mut dec_cost = inc_cost;
-        let max_iter = num_iterations - 1;
-        let mut low_idx = num_iterations;
-        let mut high_idx = num_iterations;
-        let mut swap_log = [0i16; 32];
-
-        for _ in 0..max_iter {
-            let total = add(dec_cost, inc_cost);
-            let doubled_budget = shl(budget, 1);
-            let balance = sub(total, doubled_budget);
-
-            if balance < 1 {
-                // Under budget: decrease one subband
-                let mut best_idx: i16 = 0;
-                let mut best_metric: i16 = 99;
-                let mut idx: i16 = 0;
-                for i in 0..ns {
-                    if dec_alloc[i] > 0 {
-                        let step_x2 = shl(dec_alloc[i], 1);
-                        let diff = sub(threshold, gains[i]);
-                        let metric = sub(diff, step_x2);
-                        let cmp = sub(metric, best_metric);
-                        if cmp < 0 {
-                            best_idx = idx;
-                            best_metric = metric;
-                        }
-                    }
-                    idx += 1;
-                }
-                low_idx = sub(low_idx, 1);
-                swap_log[low_idx as usize] = best_idx;
-
-                let old_step = dec_alloc[best_idx as usize];
-                dec_cost = sub(dec_cost, BIT_ALLOC_COST[old_step as usize]);
-                dec_alloc[best_idx as usize] = sub(old_step, 1);
-                let new_step = dec_alloc[best_idx as usize];
-                dec_cost = add(dec_cost, BIT_ALLOC_COST[new_step as usize]);
-            } else {
-                // Over budget: increase one subband
-                let mut best_idx: i16 = 0;
-                let mut best_metric: i16 = -99;
-                let mut idx = sub(num_subbands, 1);
-                while idx >= 0 {
-                    let i = idx as usize;
-                    if sub(inc_alloc[i], 7) < 0 {
-                        let step_x2 = shl(inc_alloc[i], 1);
-                        let diff = sub(threshold, gains[i]);
-                        let metric = sub(diff, step_x2);
-                        let cmp = sub(metric, best_metric);
-                        if cmp > 0 {
-                            best_metric = metric;
-                            best_idx = idx;
-                        }
-                    }
-                    idx -= 1;
-                }
-                swap_log[high_idx as usize] = best_idx;
-                high_idx = add(high_idx, 1);
-
-                let old_step = inc_alloc[best_idx as usize];
-                if sub(old_step, 7) < 0 {
-                    inc_cost = sub(inc_cost, BIT_ALLOC_COST[old_step as usize]);
-                    inc_alloc[best_idx as usize] = add(old_step, 1);
-                    let new_step = inc_alloc[best_idx as usize];
-                    inc_cost = add(inc_cost, BIT_ALLOC_COST[new_step as usize]);
-                }
-            }
-        }
-
-        // Copy decrease allocation to output
-        for i in 0..ns {
-            alloc[i] = dec_alloc[i];
-        }
-
-        // Copy swap log to scratch buffer
-        let mut out_idx: i16 = 0;
-        let mut log_idx = low_idx;
-        while out_idx < max_iter {
-            scratch[out_idx as usize] = swap_log[log_idx as usize];
-            log_idx += 1;
-            out_idx += 1;
-        }
-    }
-
-    /// Apply frame parameter to adjust allocation.
-    /// Matches `increment_allocation_bins` at 0x10003290.
-    fn increment_allocation_bins(count: i16, alloc: &mut [i16], scratch: &[i16]) {
-        let mut remaining = count;
-        let mut idx = 0usize;
-        while remaining > 0 {
-            let subband = scratch[idx] as usize;
-            alloc[subband] = add(alloc[subband], 1);
-            idx += 1;
-            remaining = sub(remaining, 1);
         }
     }
 
@@ -630,6 +424,212 @@ impl DecoderState {
     }
 }
 
+/// Compute bit allocation for frame.
+/// Matches `compute_bit_alloc_for_frame` at 0x10001d30.
+pub(crate) fn compute_bit_alloc_for_frame(
+    remaining_bits: i16,
+    num_subbands: i16,
+    gains: &[i16],
+    alloc: &mut [i16],
+    scratch: &mut [i16],
+) {
+    let budget = if sub(remaining_bits, 0x140) > 0 {
+        let excess = sub(remaining_bits, 0x140);
+        let scaled = l_mult0(excess, 5);
+        let reduced = shr(extract_l(scaled), 3);
+        add(reduced, 0x140)
+    } else {
+        remaining_bits
+    };
+
+    let threshold = search_threshold(gains, num_subbands, budget);
+    compute_allocation(alloc, gains, num_subbands, threshold);
+    optimize_allocation(alloc, scratch, gains, budget, num_subbands, 16, threshold);
+}
+
+/// Binary search for bit allocation threshold.
+/// Matches `search_bit_allocation_threshold` at 0x100020f0.
+pub(crate) fn search_threshold(gains: &[i16], num_subbands: i16, budget: i16) -> i16 {
+    let ns = num_subbands as usize;
+    let mut thresh: i16 = -32;
+    let mut step: i16 = 32;
+
+    loop {
+        let candidate = add(thresh, step);
+        let mut local_alloc = [0i16; MAX_SUBBANDS];
+
+        for i in 0..ns {
+            let diff = sub(candidate, gains[i]);
+            let mut q = shr(diff, 1);
+            if q < 0 {
+                q = 0;
+            }
+            if sub(q, 7) > 0 {
+                q = sub(8, 1);
+            }
+            local_alloc[i] = q;
+        }
+
+        let mut cost: i16 = 0;
+        for i in 0..ns {
+            cost = add(cost, BIT_ALLOC_COST[local_alloc[i] as usize]);
+        }
+
+        let target = sub(budget, 0x20);
+        let slack = sub(cost, target);
+        if slack >= 0 {
+            thresh = candidate;
+        }
+
+        step = shr(step, 1);
+        if step <= 0 {
+            break;
+        }
+    }
+
+    thresh
+}
+
+/// Compute per-subband allocation from threshold and gains.
+/// Matches `compute_bit_allocation` at 0x10002200.
+pub(crate) fn compute_allocation(alloc: &mut [i16], gains: &[i16], num_subbands: i16, threshold: i16) {
+    for i in 0..(num_subbands as usize) {
+        let diff = sub(threshold, gains[i]);
+        let mut q = shr(diff, 1);
+        if q < 0 {
+            q = 0;
+        }
+        if sub(q, 7) > 0 {
+            q = sub(8, 1);
+        }
+        alloc[i] = q;
+    }
+}
+
+/// Greedy bit allocation optimization.
+/// Matches `optimize_bit_allocation` at 0x10001dc0.
+pub(crate) fn optimize_allocation(
+    alloc: &mut [i16],
+    scratch: &mut [i16],
+    gains: &[i16],
+    budget: i16,
+    num_subbands: i16,
+    num_iterations: i16,
+    threshold: i16,
+) {
+    let ns = num_subbands as usize;
+
+    // Compute initial cost
+    let mut inc_cost: i16 = 0;
+    for i in 0..ns {
+        inc_cost = add(inc_cost, BIT_ALLOC_COST[alloc[i] as usize]);
+    }
+
+    // Working copies
+    let mut dec_alloc = [0i16; MAX_SUBBANDS];
+    let mut inc_alloc = [0i16; MAX_SUBBANDS];
+    for i in 0..ns {
+        dec_alloc[i] = alloc[i];
+        inc_alloc[i] = alloc[i];
+    }
+
+    let mut dec_cost = inc_cost;
+    let max_iter = num_iterations - 1;
+    let mut low_idx = num_iterations;
+    let mut high_idx = num_iterations;
+    let mut swap_log = [0i16; 32];
+
+    for _ in 0..max_iter {
+        let total = add(dec_cost, inc_cost);
+        let doubled_budget = shl(budget, 1);
+        let balance = sub(total, doubled_budget);
+
+        if balance < 1 {
+            // Under budget: decrease one subband
+            let mut best_idx: i16 = 0;
+            let mut best_metric: i16 = 99;
+            let mut idx: i16 = 0;
+            for i in 0..ns {
+                if dec_alloc[i] > 0 {
+                    let step_x2 = shl(dec_alloc[i], 1);
+                    let diff = sub(threshold, gains[i]);
+                    let metric = sub(diff, step_x2);
+                    let cmp = sub(metric, best_metric);
+                    if cmp < 0 {
+                        best_idx = idx;
+                        best_metric = metric;
+                    }
+                }
+                idx += 1;
+            }
+            low_idx = sub(low_idx, 1);
+            swap_log[low_idx as usize] = best_idx;
+
+            let old_step = dec_alloc[best_idx as usize];
+            dec_cost = sub(dec_cost, BIT_ALLOC_COST[old_step as usize]);
+            dec_alloc[best_idx as usize] = sub(old_step, 1);
+            let new_step = dec_alloc[best_idx as usize];
+            dec_cost = add(dec_cost, BIT_ALLOC_COST[new_step as usize]);
+        } else {
+            // Over budget: increase one subband
+            let mut best_idx: i16 = 0;
+            let mut best_metric: i16 = -99;
+            let mut idx = sub(num_subbands, 1);
+            while idx >= 0 {
+                let i = idx as usize;
+                if sub(inc_alloc[i], 7) < 0 {
+                    let step_x2 = shl(inc_alloc[i], 1);
+                    let diff = sub(threshold, gains[i]);
+                    let metric = sub(diff, step_x2);
+                    let cmp = sub(metric, best_metric);
+                    if cmp > 0 {
+                        best_metric = metric;
+                        best_idx = idx;
+                    }
+                }
+                idx -= 1;
+            }
+            swap_log[high_idx as usize] = best_idx;
+            high_idx = add(high_idx, 1);
+
+            let old_step = inc_alloc[best_idx as usize];
+            if sub(old_step, 7) < 0 {
+                inc_cost = sub(inc_cost, BIT_ALLOC_COST[old_step as usize]);
+                inc_alloc[best_idx as usize] = add(old_step, 1);
+                let new_step = inc_alloc[best_idx as usize];
+                inc_cost = add(inc_cost, BIT_ALLOC_COST[new_step as usize]);
+            }
+        }
+    }
+
+    // Copy decrease allocation to output
+    for i in 0..ns {
+        alloc[i] = dec_alloc[i];
+    }
+
+    // Copy swap log to scratch buffer
+    let mut out_idx: i16 = 0;
+    let mut log_idx = low_idx;
+    while out_idx < max_iter {
+        scratch[out_idx as usize] = swap_log[log_idx as usize];
+        log_idx += 1;
+        out_idx += 1;
+    }
+}
+
+/// Apply frame parameter to adjust allocation.
+/// Matches `increment_allocation_bins` at 0x10003290.
+pub(crate) fn increment_allocation_bins(count: i16, alloc: &mut [i16], scratch: &[i16]) {
+    let mut remaining = count;
+    let mut idx = 0usize;
+    while remaining > 0 {
+        let subband = scratch[idx] as usize;
+        alloc[subband] = add(alloc[subband], 1);
+        idx += 1;
+        remaining = sub(remaining, 1);
+    }
+}
+
 /// 4-tap PRNG for noise fill.
 /// Matches `noise_prng` at 0x10003870.
 fn noise_prng(state: &mut [i16; 4]) -> i16 {
@@ -745,7 +745,7 @@ mod tests {
     fn test_compute_allocation() {
         let gains = [10i16, 8, 6, 4, 2, 0, -2, -4];
         let mut alloc = [0i16; 8];
-        DecoderState::compute_allocation(&mut alloc, &gains, 8, 10);
+        compute_allocation(&mut alloc, &gains, 8, 10);
         assert_eq!(alloc[0], 0); // (10-10)/2 = 0
         assert_eq!(alloc[7], 7); // (10-(-4))/2 = 7
     }

@@ -1,5 +1,7 @@
+pub mod analysis;
 pub mod bitstream;
 pub mod decoder;
+pub mod encoder;
 pub mod filterbank;
 pub mod fixedpoint;
 pub mod synthesis;
@@ -7,6 +9,7 @@ pub mod tables;
 pub mod wav;
 
 use decoder::{DecoderState, FRAME_SIZE};
+use encoder::EncoderState;
 
 /// A1800 audio codec decoder.
 ///
@@ -100,6 +103,90 @@ impl A1800Decoder {
             scale_param,
         );
 
+        Ok(())
+    }
+}
+
+/// Errors that can occur during encoding.
+#[derive(Debug)]
+pub enum EncodeError {
+    /// Invalid bitrate (must be 4800–32000 in steps of 800).
+    InvalidBitrate(u16),
+    /// Input buffer too small for one frame.
+    InputTooSmall { expected: usize, got: usize },
+    /// Output buffer too small for encoded frame.
+    OutputTooSmall { expected: usize, got: usize },
+}
+
+impl std::fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncodeError::InvalidBitrate(br) => {
+                write!(f, "invalid bitrate {}: must be 4800–32000 in steps of 800", br)
+            }
+            EncodeError::InputTooSmall { expected, got } => {
+                write!(f, "input too small: need {} samples, got {}", expected, got)
+            }
+            EncodeError::OutputTooSmall { expected, got } => {
+                write!(f, "output too small: need {} i16 words, got {}", expected, got)
+            }
+        }
+    }
+}
+
+impl std::error::Error for EncodeError {}
+
+/// A1800 audio codec encoder.
+///
+/// Encodes 16-bit PCM audio samples into .a18 bitstream frames.
+/// Each frame consumes 320 samples (20ms at 16kHz).
+pub struct A1800Encoder {
+    state: EncoderState,
+}
+
+impl A1800Encoder {
+    /// Create a new encoder for the given bitrate.
+    ///
+    /// Bitrate must be 4800–32000 in steps of 800 (e.g., 8000, 16000, 24000).
+    pub fn new(bitrate: u16) -> Result<Self, EncodeError> {
+        let state = EncoderState::new(bitrate).map_err(|_| EncodeError::InvalidBitrate(bitrate))?;
+        Ok(A1800Encoder { state })
+    }
+
+    /// Size of one encoded frame in i16 words.
+    pub fn encoded_frame_size(&self) -> usize {
+        self.state.encoded_frame_size as usize
+    }
+
+    /// Encode one frame of A1800 audio.
+    ///
+    /// `input` must contain at least 320 PCM samples.
+    /// `output` must have space for at least `encoded_frame_size()` i16 words.
+    pub fn encode_frame(
+        &mut self,
+        input: &[i16],
+        output: &mut [i16],
+    ) -> Result<(), EncodeError> {
+        if input.len() < FRAME_SIZE {
+            return Err(EncodeError::InputTooSmall {
+                expected: FRAME_SIZE,
+                got: input.len(),
+            });
+        }
+        let enc_size = self.encoded_frame_size();
+        if output.len() < enc_size {
+            return Err(EncodeError::OutputTooSmall {
+                expected: enc_size,
+                got: output.len(),
+            });
+        }
+
+        // Zero output first
+        for w in output[..enc_size].iter_mut() {
+            *w = 0;
+        }
+
+        self.state.encode_frame_to_bitstream(&input[..FRAME_SIZE], &mut output[..enc_size]);
         Ok(())
     }
 }

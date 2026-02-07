@@ -1,7 +1,9 @@
-/// Bitstream reader for A1800 encoded frames.
+/// Bitstream reader and writer for A1800 encoded frames.
 ///
-/// Reads bits MSB-first from a sequence of 16-bit words,
+/// Reader reads bits MSB-first from a sequence of 16-bit words,
 /// matching the original DLL's `read_bit` function at 0x10003820.
+/// Writer packs bits MSB-first into 16-bit words,
+/// matching the DLL's `write_bitstream` function at 0x10003c30.
 
 use crate::fixedpoint::{add, shl, shr, sub};
 
@@ -65,6 +67,71 @@ impl<'a> BitstreamReader<'a> {
             value = add(shl(value, 1), self.last_bit);
         }
         value
+    }
+}
+
+/// Bitstream writer state.
+///
+/// Packs bits MSB-first into i16 words, matching the DLL's write_bitstream.
+pub struct BitstreamWriter<'a> {
+    data: &'a mut [i16],
+    pos: usize,
+    bits_free: i16,     // bits remaining in current word (starts at 16)
+    accumulator: u16,   // partially-filled word
+}
+
+impl<'a> BitstreamWriter<'a> {
+    /// Create a new bitstream writer.
+    ///
+    /// `data` is the output buffer of i16 words.
+    pub fn new(data: &'a mut [i16]) -> Self {
+        BitstreamWriter {
+            data,
+            pos: 0,
+            bits_free: 16,
+            accumulator: 0,
+        }
+    }
+
+    /// Write `width` bits from the low bits of `value`, MSB-first.
+    pub fn write_bits(&mut self, value: i16, width: i16) {
+        let mut remaining = width;
+        let mut val = (value as u16) & ((1u16 << (width as u32)) - 1);
+
+        while remaining > 0 {
+            if remaining >= self.bits_free {
+                // Fill current word and emit
+                let shift = remaining - self.bits_free;
+                self.accumulator |= (val >> (shift as u32)) & ((1u16 << (self.bits_free as u32)) - 1);
+                self.data[self.pos] = self.accumulator as i16;
+                self.pos += 1;
+                remaining = sub(remaining, self.bits_free);
+                val &= (1u16 << (remaining as u32)) - 1;
+                self.accumulator = 0;
+                self.bits_free = 16;
+            } else {
+                // Partial fill
+                let shift = self.bits_free - remaining;
+                self.accumulator |= val << (shift as u32);
+                self.bits_free = sub(self.bits_free, remaining);
+                remaining = 0;
+            }
+        }
+    }
+
+    /// Flush any remaining partial word.
+    pub fn flush(&mut self) {
+        if self.bits_free < 16 {
+            self.data[self.pos] = self.accumulator as i16;
+            self.pos += 1;
+            self.accumulator = 0;
+            self.bits_free = 16;
+        }
+    }
+
+    /// Return the number of complete words written so far.
+    pub fn words_written(&self) -> usize {
+        self.pos
     }
 }
 
@@ -146,5 +213,54 @@ mod tests {
 
         let val = bs.read_bits(5);
         assert_eq!(val, 15);
+    }
+
+    #[test]
+    fn test_writer_basic() {
+        let mut data = [0i16; 2];
+        {
+            let mut bw = BitstreamWriter::new(&mut data);
+            bw.write_bits(0b1010, 4);
+            bw.write_bits(0b0101, 4);
+            bw.write_bits(0b11000011, 8);
+            bw.flush();
+        }
+        // 1010_0101_1100_0011 = 0xA5C3
+        assert_eq!(data[0], 0xA5C3u16 as i16);
+    }
+
+    #[test]
+    fn test_writer_cross_word() {
+        let mut data = [0i16; 2];
+        {
+            let mut bw = BitstreamWriter::new(&mut data);
+            bw.write_bits(0xFF, 8);   // 1111_1111
+            bw.write_bits(0x00, 8);   // 0000_0000
+            bw.write_bits(0x00, 8);   // 0000_0000
+            bw.write_bits(0xFF, 8);   // 1111_1111
+            bw.flush();
+        }
+        assert_eq!(data[0], 0xFF00u16 as i16);
+        assert_eq!(data[1], 0x00FFi16);
+    }
+
+    #[test]
+    fn test_writer_reader_roundtrip() {
+        // Write some values, read them back
+        let mut data = [0i16; 4];
+        {
+            let mut bw = BitstreamWriter::new(&mut data);
+            bw.write_bits(15, 5);     // 5-bit value
+            bw.write_bits(7, 4);      // 4-bit value
+            bw.write_bits(1, 1);      // 1-bit value
+            bw.write_bits(0b101010, 6); // 6-bit value
+            bw.flush();
+        }
+
+        let mut bs = BitstreamReader::new(&data, 64);
+        assert_eq!(bs.read_bits(5), 15);
+        assert_eq!(bs.read_bits(4), 7);
+        assert_eq!(bs.read_bits(1), 1);
+        assert_eq!(bs.read_bits(6), 0b101010);
     }
 }
