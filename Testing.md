@@ -47,7 +47,7 @@ for i in range(n):
         s = 10000.0 * env * math.sin(2 * math.pi * 600 * t)
     samples.append(max(-32768, min(32767, int(round(s)))))
 
-with wave.open('test_input.wav', 'w') as w:
+with wave.open('test_data/test_input.wav', 'w') as w:
     w.setnchannels(1)
     w.setsampwidth(2)
     w.setframerate(sr)
@@ -60,7 +60,7 @@ with wave.open('test_input.wav', 'w') as w:
 Encode and decode at a given bitrate:
 
 ```bash
-cargo run -- encode test_input.wav test.a18 --bitrate 16000
+cargo run -- encode test_data/test_input.wav test.a18 --bitrate 16000
 cargo run -- decode test.a18 test_output.wav
 ```
 

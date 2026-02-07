@@ -1036,13 +1036,13 @@ mod tests {
 
     #[test]
     fn test_roundtrip_wav_file() {
-        // Round-trip test_input.wav through the codec and compare input vs output.
+        // Round-trip test_data/test_input.wav through the codec and compare input vs output.
         // Checks per-segment SNR, overall correlation, and sample-level bounds.
         use crate::{A1800Encoder, A1800Decoder};
         use crate::wav::read_wav_samples;
         use std::fs::File;
 
-        let wav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test_input.wav");
+        let wav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test_data/test_input.wav");
         let mut f = File::open(wav_path)
             .expect("test_input.wav not found — run the generation script from Testing.md");
         let (input_samples, sample_rate) = read_wav_samples(&mut f).unwrap();

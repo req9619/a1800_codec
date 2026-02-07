@@ -50,6 +50,8 @@ Bitrates 4800-24000 bps are supported for encoding. Decoding works at all bitrat
 
 ## Tests
 
+See [Testing.md](Testing.md) for more information about non-synthetic tests.
+
 ```
 cargo test
 ```
