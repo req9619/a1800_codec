@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "a1800-codec"
+version = "1.1.0"
+metadata-version = "2.1"
+description = "Python bindings for the GeneralPlus A1800 audio codec"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+keywords = ["a1800", "sunplus", "generalplus", "furby", "leapfrog", "codec"]
+authors = [
+    { name="John Kelley", email="john@kelley.ca" },
+    { name="Claude Opus 4.6", email="noreply@anthropic.com" },
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+
+[project.urls]
+GitHub = "https://github.com/John-K/a1800_codec"
+Issue = "https://github.com/John-K/a1800_codec/issues"
+
+
+[tool.maturin]
+profile = "release"
+features = ["python"]
+strip = true

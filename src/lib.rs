@@ -4,6 +4,8 @@ pub mod decoder;
 pub mod encoder;
 pub mod filterbank;
 pub mod fixedpoint;
+#[cfg(feature = "python")]
+mod python;
 pub mod synthesis;
 pub mod tables;
 pub mod wav;
