@@ -61,3 +61,7 @@ cargo test
 ## License
 
 This is an independent clean-room reimplementation based on static analysis of the original DLL. No original source code or proprietary headers were used.
+
+## Other Resources
+ * A python implementation of the encoder by @prekageo at [a1800_codec](https://github.com/prekageo/a1800_codec)
+ * Furby reverse engineering tools which decode via python and proprietary `A1800.DLL` [Furby](https://github.com/benbalter/Furby)
