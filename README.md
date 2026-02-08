@@ -1,5 +1,7 @@
 # a1800_codec
-![a1800_codec PyPi](https://img.shields.io/pypi/v/a1800_codec) ![a1800_codec Crates.io](https://img.shields.io/crates/v/a1800_codec)
+![PyPI - Version](https://img.shields.io/pypi/v/a1800-codec?link=https%3A%2F%2Fpypi.org%2Fproject%2Fa1800-codec%2F)
+![Crates.io Version](https://img.shields.io/crates/v/a1800_codec?link=https%3A%2F%2Fimg.shields.io%2Fcrates%2Fdependents%2Fa1800-codec%3Flink%3Dhttps%253A%252F%252Fcrates.io%252Fcrates%252Fa1800_codec)
+
 
 A Rust encoder and decoder for the GeneralPlus A1800 audio codec, reverse-engineered from `A1800.DLL`.
 
